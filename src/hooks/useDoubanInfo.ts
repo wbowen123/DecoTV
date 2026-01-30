@@ -85,6 +85,18 @@ export interface DoubanCommentsResponse {
   comments: DoubanComment[];
 }
 
+/** 推荐影片 */
+export interface DoubanRecommendation {
+  id: string;
+  title: string;
+  images?: {
+    small: string;
+    medium: string;
+    large: string;
+  };
+  alt?: string;
+}
+
 /** Hook 返回类型 */
 export interface UseDoubanInfoResult {
   // 详情数据
@@ -98,6 +110,10 @@ export interface UseDoubanInfoResult {
   commentsError: Error | null;
   commentsTotal: number;
 
+  // 推荐影片
+  recommendations: DoubanRecommendation[];
+  recommendationsLoading: boolean;
+
   // 刷新函数
   refreshDetail: () => Promise<void>;
   refreshComments: () => Promise<void>;
@@ -108,11 +124,11 @@ export interface UseDoubanInfoResult {
 // ============================================================================
 
 /**
- * 通过代理接口获取豆瓣电影详情
+ * 通过代理接口获取豆瓣电影详情（包含推荐影片）
  */
 async function fetchDoubanDetail(
   doubanId: string | number,
-): Promise<DoubanMovieDetail> {
+): Promise<DoubanMovieDetail & { recommendations?: DoubanRecommendation[] }> {
   const response = await fetch(
     `/api/douban/proxy?path=movie/subject/${doubanId}`,
   );
@@ -182,21 +198,33 @@ export function useDoubanInfo(
   const [commentsError, setCommentsError] = useState<Error | null>(null);
   const [commentsTotal, setCommentsTotal] = useState(0);
 
-  // 获取详情
+  // 推荐影片状态
+  const [recommendations, setRecommendations] = useState<
+    DoubanRecommendation[]
+  >([]);
+  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+
+  // 获取详情（包含推荐影片）
   const refreshDetail = useCallback(async () => {
     if (!doubanId) return;
 
     setDetailLoading(true);
+    setRecommendationsLoading(true);
     setDetailError(null);
 
     try {
       const data = await fetchDoubanDetail(doubanId);
       setDetail(data);
+      // 提取推荐影片数据
+      if (data.recommendations && Array.isArray(data.recommendations)) {
+        setRecommendations(data.recommendations);
+      }
     } catch (error) {
       console.error('[useDoubanInfo] Failed to fetch detail:', error);
       setDetailError(error instanceof Error ? error : new Error('未知错误'));
     } finally {
       setDetailLoading(false);
+      setRecommendationsLoading(false);
     }
   }, [doubanId]);
 
@@ -226,6 +254,7 @@ export function useDoubanInfo(
       setDetail(null);
       setComments([]);
       setCommentsTotal(0);
+      setRecommendations([]);
       return;
     }
 
@@ -257,6 +286,8 @@ export function useDoubanInfo(
     commentsLoading,
     commentsError,
     commentsTotal,
+    recommendations,
+    recommendationsLoading,
     refreshDetail,
     refreshComments,
   };

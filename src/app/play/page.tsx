@@ -3,6 +3,7 @@
 'use client';
 
 import Artplayer from 'artplayer';
+import artplayerPluginDanmuku from 'artplayer-plugin-danmuku';
 import Hls from 'hls.js';
 import { Heart } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -23,10 +24,13 @@ import {
 } from '@/lib/db.client';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
+import { useDanmu } from '@/hooks/useDanmu';
 import { useDoubanInfo } from '@/hooks/useDoubanInfo';
 
+import DanmuSettingsPanel from '@/components/DanmuSettingsPanel';
 import EpisodeSelector from '@/components/EpisodeSelector';
 import { MovieMetaInfo } from '@/components/MovieMetaInfo';
+import { MovieRecommendations } from '@/components/MovieRecommendations';
 import { MovieReviews } from '@/components/MovieReviews';
 import PageLayout from '@/components/PageLayout';
 import SkipConfigPanel from '@/components/SkipConfigPanel';
@@ -231,6 +235,9 @@ function PlayPageClient() {
   // 跳过片头片尾设置面板状态
   const [isSkipConfigPanelOpen, setIsSkipConfigPanelOpen] = useState(false);
 
+  // 弹幕设置面板状态
+  const [isDanmuPanelOpen, setIsDanmuPanelOpen] = useState(false);
+
   // Toast 通知状态
   const [toast, setToast] = useState<{
     show: boolean;
@@ -265,6 +272,23 @@ function PlayPageClient() {
 
   // Wake Lock 相关
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // 弹幕相关
+  const {
+    danmuList,
+    settings: danmuSettings,
+    loading: danmuLoading,
+    error: danmuError,
+    total: danmuTotal,
+    loadDanmu,
+    updateSettings: updateDanmuSettings,
+  } = useDanmu({
+    doubanId: videoDoubanId,
+    title: videoTitle,
+    year: videoYear,
+    episode: currentEpisodeIndex + 1,
+    autoLoad: true,
+  });
 
   // -----------------------------------------------------------------------------
   // 工具函数（Utils）
@@ -1579,7 +1603,50 @@ function PlayPageClient() {
               }
             },
           },
+          {
+            name: '外部弹幕',
+            html: '外部弹幕',
+            icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" fill="#ffffff"/><path d="M7 9h2v2H7zM11 9h2v2h-2zM15 9h2v2h-2z" fill="#ffffff"/></svg>',
+            switch: danmuSettings.enabled,
+            onSwitch: function (item: any) {
+              const newEnabled = !item.switch;
+              updateDanmuSettings({ enabled: newEnabled });
+              if (newEnabled) {
+                loadDanmu();
+              }
+              return newEnabled;
+            },
+          },
+          {
+            html: '弹幕设置',
+            icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="#ffffff"/></svg>',
+            tooltip: danmuSettings.enabled ? `${danmuTotal} 条` : '未启用',
+            onClick: function () {
+              setIsDanmuPanelOpen(true);
+            },
+          },
         ],
+        // 弹幕插件
+        plugins: danmuSettings.enabled
+          ? [
+              artplayerPluginDanmuku({
+                danmuku: danmuList.map((d) => ({
+                  text: d.text,
+                  time: d.time,
+                  color: d.color || '#ffffff',
+                  mode: (d.mode || 0) as 0 | 1 | 2,
+                })),
+                speed: danmuSettings.speed,
+                opacity: danmuSettings.opacity,
+                fontSize: danmuSettings.fontSize,
+                margin: danmuSettings.margin,
+                antiOverlap: danmuSettings.antiOverlap,
+                visible: danmuSettings.visible,
+                synchronousPlayback: true,
+                emitter: false, // 禁用发送弹幕
+              }),
+            ]
+          : [],
         // 控制栏配置
         controls: [
           {
@@ -1767,6 +1834,49 @@ function PlayPageClient() {
       setError('播放器初始化失败');
     }
   }, [Artplayer, Hls, videoUrl, loading, blockAdEnabled]);
+
+  // 弹幕设置变化时更新弹幕插件
+  useEffect(() => {
+    if (!artPlayerRef.current) return;
+
+    // 获取弹幕插件实例
+    const danmukuPlugin = artPlayerRef.current.plugins?.artplayerPluginDanmuku;
+    if (!danmukuPlugin) return;
+
+    // 更新弹幕设置
+    try {
+      if (danmukuPlugin.config) {
+        danmukuPlugin.config({
+          speed: danmuSettings.speed,
+          opacity: danmuSettings.opacity,
+          fontSize: danmuSettings.fontSize,
+          margin: danmuSettings.margin,
+          antiOverlap: danmuSettings.antiOverlap,
+        });
+      }
+
+      // 更新弹幕可见性
+      if (danmuSettings.visible) {
+        danmukuPlugin.show?.();
+      } else {
+        danmukuPlugin.hide?.();
+      }
+
+      // 更新弹幕数据
+      if (danmuList.length > 0 && danmukuPlugin.load) {
+        danmukuPlugin.load(
+          danmuList.map((d) => ({
+            text: d.text,
+            time: d.time,
+            color: d.color || '#ffffff',
+            mode: d.mode || 0,
+          })),
+        );
+      }
+    } catch (err) {
+      console.warn('[Danmu] 更新弹幕插件失败:', err);
+    }
+  }, [danmuSettings, danmuList]);
 
   // 当组件卸载时清理定时器、Wake Lock 和播放器资源
   useEffect(() => {
@@ -2237,6 +2347,18 @@ function PlayPageClient() {
         currentTime={artPlayerRef.current?.currentTime || 0}
       />
 
+      {/* 弹幕设置面板 */}
+      <DanmuSettingsPanel
+        isOpen={isDanmuPanelOpen}
+        onClose={() => setIsDanmuPanelOpen(false)}
+        settings={danmuSettings}
+        onSettingsChange={updateDanmuSettings}
+        danmuTotal={danmuTotal}
+        loading={danmuLoading}
+        error={danmuError}
+        onLoadDanmu={loadDanmu}
+      />
+
       {/* Toast 通知 */}
       {toast.show && (
         <Toast
@@ -2258,6 +2380,8 @@ const DoubanInfoSection = ({ doubanId }: { doubanId: number }) => {
     detailLoading,
     commentsLoading,
     commentsTotal,
+    recommendations,
+    recommendationsLoading,
   } = useDoubanInfo(doubanId > 0 ? doubanId : null);
 
   // 如果没有豆瓣 ID，不渲染
@@ -2283,6 +2407,13 @@ const DoubanInfoSection = ({ doubanId }: { doubanId: number }) => {
         total={commentsTotal}
         doubanId={doubanId}
         maxDisplay={6}
+      />
+
+      {/* 推荐影片 */}
+      <MovieRecommendations
+        recommendations={recommendations}
+        loading={recommendationsLoading}
+        maxDisplay={10}
       />
     </div>
   );
